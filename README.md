@@ -70,6 +70,10 @@ aws --version
 # You will be prompted to enter your AWS Access Key ID, Secret Access Key,
 # default region (e.g., ap-southeast-1), and output format (json).
 aws configure
+
+# 6. Check the currently authenticated AWS identity.
+# This command returns information about the IAM user or role whose credentials are being used.
+aws sts get-caller-identity
 ```
 
 > **Security Best Practice:** Never hardcode your AWS credentials directly inside your Terraform code (`.tf` files). Terraform will automatically detect and utilize the credentials configured by the `aws configure` command (stored in `~/.aws/credentials`).
@@ -135,13 +139,11 @@ Terraform Core is a statically-linked binary written in the **Go** programming l
 
 #### Component: Terraform Providers
 
-Terraform Core does not know how to talk to AWS, Google Cloud, or Docker directly. Instead, it relies on Providers.
+Terraform Core does not know how to talk to AWS, Google Cloud, or Docker directly. Instead, it relies on **Providers**.
 
-Plugins: Providers are executable binaries that act as an abstraction layer. They translate Terraform’s standard resource requests into API calls that the cloud provider understands.
-
-The Bridge: For every cloud service or platform you want to manage (AWS, Azure, GitHub, Kubernetes), there is a corresponding provider.
-
-Up-to-date: Because providers are separate from the core, they can be updated independently to support new cloud features as soon as they are released.
+- **Plugins:** Providers are executable binaries that act as an abstraction layer. They translate Terraform’s standard resource requests into API calls that the cloud provider understands.
+- **The Bridge:** For every cloud service or platform you want to manage (AWS, Azure, GitHub, Kubernetes), there is a corresponding provider.
+- **Up-to-date:** Because providers are separate from the core, they can be updated independently to support new cloud features as soon as they are released.
 
 #### Component: The State File (`terraform.tfstate`)
 
@@ -165,3 +167,89 @@ When you run Terraform, it moves through these logical steps:
 1. **Refresh:** Queries the cloud provider to see if any "out-of-band" changes happened (someone manually deleted a server).
 2. **Plan:** Determines what needs to be done to reach the state defined in your code.
 3. **Apply:** Executes the plan via the Providers.
+
+### 3. HCL (HashiCorp Configuration Language) Basics
+
+Terraform uses its own domain-specific language called **HashiCorp Configuration Language (HCL)**. It is designed to be highly readable, declarative, and structured. While Terraform can technically consume JSON, HCL is the industry standard due to its support for comments, simpler syntax, and powerful built-in functions.
+
+#### The Anatomy of HCL
+
+Every Terraform configuration file (ending in `.tf`) is built using a combination of **Blocks**, **Arguments**, and **Expressions**.
+
+- **Blocks:** Blocks are the fundamental containers for other content. A block has a type (e.g., `resource`, `provider`), often followed by zero or more labels, and a body enclosed in curly braces `{}`.
+- **Arguments:** Arguments assign a value to a specific name. They reside inside blocks. The syntax is simply `key = value`.
+- **Expressions:** Expressions represent a value, either literally or by referencing and combining other values.
+
+```hcl
+block_type "label_1" "label_2" {
+  argument_key = "argument_value" # This is a comment
+}
+```
+
+#### Core Block Types
+
+To get started, you need to understand the three most important block types used in almost every Terraform project.
+
+1. **The `terraform` Block**
+
+This block configures Terraform's underlying behavior, such as specifying the required version of Terraform itself or defining which providers are required.
+
+```hcl
+terraform {
+  required_version = ">= 1.7.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
+    }
+  }
+}
+```
+
+2. **The `provider` Block**
+
+Providers are the plugins that Terraform uses to interact with cloud platforms (like AWS). The `provider` block configures the connection details, such as the region or authentication methods.
+
+```hcl
+provider "aws" {
+  region = "ap-southeast-1"
+  # Note: Credentials should be configured via AWS CLI, not hardcoded here.
+}
+```
+
+3. **The `resource` Block**
+
+This is the most critical block. It defines a piece of infrastructure that you want to create, such as a virtual machine, a network configuration, or a database.
+
+- **Label 1 (Resource Type):** Defines what you are creating (e.g., `aws_instance`). This is strictly defined by the provider.
+- **Label 2 (Local Name):** An identifier you choose to refer to this resource elsewhere in your Terraform code (e.g., `web_server`). This name has no impact on the actual cloud resource name.
+
+```hcl
+resource "aws_instance" "web_server" {
+  ami           = "ami-0c55b159cbfafe1f0" # Amazon Linux 2 AMI
+  instance_type = "t3.micro"
+
+  tags = {
+    Name        = "Production-Web-Server"
+    Environment = "Production"
+  }
+}
+```
+
+#### Comments and Naming Conventions
+
+Writing maintainable IaC requires discipline in commenting and naming.
+
+- **Comments:** HCL supports three comment styles:
+  - `#` Single-line comment (Highly Recommended and industry standard).
+  - `//` Single-line comment (Alternative, less common).
+  - `/* ... */` Multi-line comment.
+- **Naming Conventions (Best Practices):**
+  - Always use `snake_case` (lowercase words separated by underscores) for local resource names, variables, and outputs.
+  - _Bad:_ `resource "aws_instance" "WebServer" { ... }`
+  - _Good:_ `resource "aws_instance" "web_server" { ... }`
+
+#### Code Formatting
+
+You do not need to worry about manual indentation. Terraform provides a built-in command to automatically format your code to HashiCorp's exact standards. Always run `terraform fmt` in your terminal before committing code to version control.
