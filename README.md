@@ -10,6 +10,7 @@
 
 1. [Environment Setup & Installation](#environment-setup--installation)
 2. [Terraform Fundamentals](#terraform-fundamentals)
+3. [Configuration Management (Variables & Outputs)](#configuration-management-variables--outputs)
 
 ## Environment Setup & Installation
 
@@ -411,7 +412,7 @@ terraform fmt
 terraform validate
 
 # 3. Generate the Execution Plan
-# Read the output carefully. You should see a green '+' indicating that 
+# Read the output carefully. You should see a green '+' indicating that
 # 1 resource (the 'aws_instance.app_server') will be created.
 terraform plan
 
@@ -434,3 +435,210 @@ terraform destroy
 ```
 
 Once you see **"Destroy complete!"**, your AWS environment is clean again. You have successfully completed the full Infrastructure as Code lifecycle!
+
+## Configuration Management (Variables & Outputs)
+
+Hardcoding values (like specific AMI IDs or instance types) directly into your `main.tf` makes your infrastructure rigid and difficult to reuse. To build enterprise-grade, dynamic infrastructure, Terraform provides mechanisms to pass data in and extract data out, much like functions in traditional programming.
+
+### 1. Input Variables (`variables.tf`)
+
+Input variables serve as parameters for a Terraform module. They allow you to customize aspects of your infrastructure without altering the underlying source code.
+
+By convention, variables are defined in a dedicated file named `variables.tf`.
+
+#### The Anatomy of a Variable Block
+
+A variable block requires a unique name and accepts several optional (but highly recommended) arguments to enforce strict typing and documentation.
+
+```bash
+variable "instance_type" {
+  description = "The EC2 instance type. Must be t2.micro or t3.micro for free tier."
+  type        = string
+  default     = "t3.micro"
+}
+```
+
+- `description`: Always document your variables. This is crucial for team collaboration and auto-generating documentation.
+- `type`: Enforces strict data typing. Terraform supports primitives (`string`, `number`, `bool`) and complex structures (`list`, `map`, `object`, `tuple`).
+- `default`: If provided, the variable is optional. If omitted, the variable becomes mandatory, and Terraform will prompt the user for it during `plan` or `apply`.
+- `sensitive`: Set to `true` to prevent Terraform from printing the value in the CLI output (useful for passwords or API tokens).
+
+#### Advanced Variables: Validation Rules (Enterprise Practice)
+
+To prevent deployment errors early, you can add custom validation rules to your variables.
+
+```bash
+variable "environment" {
+  description = "The deployment environment name."
+  type        = string
+
+  validation {
+    condition     = contains(["dev", "staging", "prod"], var.environment)
+    error_message = "The environment must be one of: 'dev', 'staging', or 'prod'."
+  }
+}
+```
+
+#### How to Assign Values to Variables (Variable Precedence)
+
+Terraform loads variables in a strict order of precedence (the last one evaluated overrides the previous ones). This is a common interview topic and a critical operational concept:
+
+1. **Environment Variables:** Prefixed with `TF_VAR_` (e.g., `export` `TF_VAR_instance_type="t2.large"`).
+2. **The `terraform.tfvars` file:** The standard file for defining project-specific values. Terraform loads this automatically.
+3. **`*.auto.tfvars` or `*.auto.tfvars.json` files:** Loaded automatically, overriding `terraform.tfvars`.
+4. **The `-var` or `-var-file` CLI flags:** The highest priority (e.g., `terraform apply -var="instance_type=m5.large"`).
+
+Example `terraform.tfvars` file:
+
+```bash
+# This file contains the actual values injected into 'variables.tf'
+instance_type = "t3.small"
+environment   = "dev"
+```
+
+### 2. Output Values (`outputs.tf`)
+
+If variables are the "inputs" to a function, Output Values are the "return values". They expose information about your infrastructure after it has been deployed.
+
+By convention, outputs are defined in a file named `outputs.tf`.
+
+#### Why use Outputs?
+
+1. **Information Retrieval:** To quickly get connection details (like a database endpoint or a web server's Public IP) without logging into the cloud console.
+2. **Module Integration:** To pass data from a Child Module up to a Root Module (we will cover modules in feature).
+3. **Remote State:** Other separate Terraform projects can read these outputs.
+
+#### Example: Extracting the Server IP
+
+After creating the EC2 instance, we want Terraform to automatically print its Public IP address.
+
+```bash
+output "web_server_public_ip" {
+  description = "The public IP address of the deployed web server."
+  value       = aws_instance.app_server.public_ip
+}
+
+output "web_server_dns" {
+  description = "The public DNS name of the web server."
+  value       = aws_instance.app_server.public_dns
+}
+```
+
+#### Viewing Outputs
+
+After a successful `terraform apply`, Terraform prints the outputs to your terminal:
+
+```bash
+Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
+
+Outputs:
+
+web_server_dns = "ec2-203-0-113-5.compute-1.amazonaws.com"
+web_server_public_ip = "203.0.113.5"
+```
+
+You can also retrieve outputs at any time without running a full apply by using the command:
+
+```bash
+terraform output web_server_public_ip
+```
+
+#### Refactoring `main.tf` to use Variables
+
+Now, let's tie it all together. Here is how your `main.tf` looks when referencing the variables defined above, using the `var.<variable_name>` syntax.
+
+```bash
+resource "aws_instance" "app_server" {
+  ami           = "ami-0c7217cdde317cfec"
+
+  # Injecting the input variable here
+  instance_type = var.instance_type
+
+  tags = {
+    # Using string interpolation to make dynamic names
+    Name        = "WebServer-${var.environment}"
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+  }
+}
+```
+
+### 3. Local Values (`locals`)
+
+Local values (or "locals") are like temporary private variables in a programming function. They allow you to assign a name to an expression, so you can use that name multiple times throughout your module without repeating the logic.
+
+#### Why use Locals?
+
+- **DRY (Don't Repeat Yourself):** If you find yourself using the same complex string or calculation in multiple places, use a local.
+- **Readability:** Give meaningful names to complex logic.
+- **Centralized Logic:** If you need to change a naming convention or a calculation, you only change it in one place.
+
+#### Example: Dynamic Naming Convention
+
+Instead of manually building tag names for every resource, you can centralize the logic in a `locals` block.
+
+```bash
+locals {
+  service_name = "billing-api"
+  owner        = "platform-team"
+
+  # Combining variables and strings into a single local value
+  common_tags = {
+    Service     = local.service_name
+    Owner       = local.owner
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+  }
+
+  # Conditional logic in locals
+  instance_name = "${local.service_name}-${var.environment}-server"
+}
+
+resource "aws_instance" "app" {
+  ami           = "ami-0c7217cdde317cfec"
+  instance_type = var.instance_type
+
+  # Applying the centralized tags
+  tags = local.common_tags
+}
+```
+
+> **Architect's Tip:** Use Input Variables for values that change per environment (like `region` or `instance_type`). Use Locals for values that are derived or internal to the module's logic.
+
+### 4. Data Sources (`data`)
+
+Data sources allow Terraform to use information defined outside of Terraform, or defined by another separate Terraform configuration. It is a "Read-Only" operation.
+
+#### Use Cases
+
+- Fetching the ID of a default VPC that already exists.
+- Looking up the latest AMI ID for a specific OS (so you don't have to hardcode it).
+- Retrieving details about an existing security group or database.
+
+#### Example: Fetching the Latest Ubuntu AMI
+
+Instead of hardcoding `ami-0c7217cdde317cfec`, which might become outdated or differ by region, you can query AWS directly.
+
+```bash
+# Query the AWS API for the latest Ubuntu 22.04 AMI
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"] # Canonical (the company behind Ubuntu)
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
+resource "aws_instance" "web" {
+  # Reference the data source result here
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = "t3.micro"
+}
+```
