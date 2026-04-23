@@ -12,6 +12,7 @@
 2. [Terraform Fundamentals](#terraform-fundamentals)
 3. [Configuration Management (Variables & Outputs)](#configuration-management-variables--outputs)
 4. [State Management (The Brain of Terraform)](#state-management-the-brain-of-terraform)
+5. [Advanced Control Structures](#advanced-control-structures)
 
 ## Environment Setup & Installation
 
@@ -858,3 +859,218 @@ The `rm` command simply makes Terraform "forget" the resource exists. The databa
 | `show`  |             Inspecting specific attributes of a deployed resource.              |            No             |          No          |
 |  `mv`   | Renaming resources in code or moving them into modules without recreating them. |            No             |         Yes          |
 |  `rm`   |  Handing off management of a resource to another system without destroying it.  |            No             |         Yes          |
+
+## Advanced Control Structures
+
+To build scalable and DRY (Don't Repeat Yourself) infrastructure, you cannot manually duplicate resource blocks. Terraform provides specialized meta-arguments - `count` and `for_each` - that allow you to dynamically provision multiple instances of a resource or module from a single block of code.
+
+### 1. Looping Constructs: `count` vs. `for_each`
+
+While both `count` and `for_each` allow you to create multiple resources, their underlying mechanics are fundamentally different. Understanding this difference is critical for maintaining stable production environments.
+
+#### The `count` Meta-Argument
+
+The `count` meta-argument accepts a whole number (integer). It creates that exact number of identical resources. Under the hood, Terraform stores resources created by `count` as an **Array (List)**.
+
+You can differentiate each instance using the `count.index` object, which starts at `0`.
+
+**Example:** Creating 3 identical worker nodes
+
+```bash
+variable "worker_names" {
+  type    = list(string)
+  default = ["worker-alpha", "worker-beta", "worker-gamma"]
+}
+
+resource "aws_instance" "worker" {
+  count         = 3 # Creates 3 instances (index 0, 1, 2)
+  ami           = "ami-0c7217cdde317cfec"
+  instance_type = "t3.micro"
+
+  tags = {
+    # Dynamically assign names based on the current index
+    Name = var.worker_names[count.index]
+  }
+}
+```
+
+**The Danger of `count` (The Index Shifting Problem):**
+
+Because `count` uses an Array, the resources are strictly bound to their index position.
+Imagine you want to remove `"worker-beta"` (index 1) from the middle of the list.
+
+- You update the list to: `["worker-alpha", "worker-gamma"]`.
+- Terraform sees index 0 is still `"worker-alpha"` (No change).
+- Terraform sees index 1 changed from `"worker-beta"` to `"worker-gamma"`. It will **destroy** the old beta server and **create** a new gamma server in its place.
+- Terraform sees index 2 is now missing. It will **destroy** the original gamma server.
+- **Result:** Total chaos and unnecessary destruction of infrastructure just because an item was removed from the middle of a list.
+
+#### The `for_each` Meta-Argument
+
+Introduced to solve the index-shifting problem of `count`, the `for_each` meta-argument accepts a **Map** or a **Set of Strings**. It creates one instance for each item in the map or set.
+
+Under the hood, Terraform stores resources created by `for_each` as a **Dictionary (Map)**. Each resource is tracked by a unique string key, not a numeric index.
+
+You can access the current item using `each.key` and `each.value`.
+
+**Example:** Creating IAM users using a Set of Strings
+
+```bash
+variable "iam_users" {
+  type    = set(string)
+  default = ["alice", "bob", "charlie"]
+}
+
+resource "aws_iam_user" "team" {
+  for_each = var.iam_users
+
+  name = each.value # or each.key, they are identical when using a set
+}
+```
+
+**Example:** Creating multiple Servers with different configurations using a Map
+
+```bash
+variable "server_configs" {
+  type = map(object({
+    ami           = string
+    instance_type = string
+  }))
+  default = {
+    "web"      = { ami = "ami-123", instance_type = "t3.micro" }
+    "database" = { ami = "ami-456", instance_type = "t3.large" }
+  }
+}
+
+resource "aws_instance" "servers" {
+  for_each = var.server_configs
+
+  ami           = each.value.ami
+  instance_type = each.value.instance_type
+
+  tags = {
+    Name = each.key # Assigns "web" or "database"
+  }
+}
+```
+
+**The Advantage of `for_each`:**
+
+If you remove "bob" from the `iam_users` set, Terraform simply looks up the key "bob" in its state file map and deletes only that specific user. Alice and Charlie are completely unaffected because they are tracked by their names (keys), not their numeric order.
+
+#### When to use which?
+
+As a best practice in modern Terraform development:
+
+- **Use `count` ONLY when:** You are creating multiple identical resources where the individual identity does not matter at all (e.g., auto-scaling group instances, identical unmanaged worker nodes), or when you want to conditionally turn a single resource on or off (`count = var.enable_feature ? 1 : 0`).
+- **Use `for_each` when:** The resources have distinct identities, unique configurations, or if there is any chance you will need to add or remove specific items from the group in the future. **When in doubt, default to `for_each`**.
+
+### 2. Dynamic Blocks (Iterating Over Nested Configurations)
+
+While `count` and `for_each` (applied at the resource level) allow you to provision multiple independent resources, there are times when you need to iterate inside a single resource.
+
+Many Terraform resources utilize "nested blocks" to configure sub-components. A classic example is the `aws_security_group` resource, which uses nested `ingress` (inbound) and `egress` (outbound) blocks to define firewall rules.
+
+If you have 10 different ports to open, writing 10 separate `ingress` blocks manually violates the DRY principle and makes the code inflexible. The `dynamic` block is Terraform's solution to this problem.
+
+#### The Syntax of a Dynamic Block
+
+A `dynamic` block acts like a `for` loop that outputs nested configuration blocks. It requires three main components:
+
+1. **The block name:** The type of nested block you want to generate (e.g., `ingress`).
+2. **The `for_each` argument:** The collection (list, set, or map) you are iterating over.
+3. **The `content` block:** The actual configuration for each generated block. You access the current item's data using `<block_name>.value`.
+
+#### Real-World Example: AWS Security Group
+
+Let's look at a highly practical scenario. We want to define our firewall rules in a variable so they can be easily modified without touching the core `main.tf` logic.
+
+1. **Define the Variable (`variables.tf`):** We define a list of objects, where each object represents a specific firewall rule.
+
+```bash
+variable "web_ingress_rules" {
+  description = "A list of ingress rules for the web server security group."
+  type = list(object({
+    description = string
+    port        = number
+    protocol    = string
+    cidr_blocks = list(string)
+  }))
+  default = [
+    {
+      description = "Allow HTTP"
+      port        = 80
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    },
+    {
+      description = "Allow HTTPS"
+      port        = 443
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    },
+    {
+      description = "Allow SSH from internal network only"
+      port        = 22
+      protocol    = "tcp"
+      cidr_blocks = ["10.0.0.0/8"]
+    }
+  ]
+}
+```
+
+2. **Use the Dynamic Block (`main.tf`):** Instead of writing three hardcoded `ingress` blocks, we use a single `dynamic` block.
+
+```bash
+resource "aws_security_group" "web_sg" {
+  name        = "web-server-sg"
+  description = "Security group for web servers"
+  vpc_id      = data.aws_vpc.default.id
+
+  # The Dynamic Block
+  dynamic "ingress" {
+    for_each = var.web_ingress_rules
+
+    # 'content' defines what goes inside each generated 'ingress' block
+    content {
+      description = ingress.value.description  # Accessing the 'description' attribute
+      from_port   = ingress.value.port         # Accessing the 'port' attribute
+      to_port     = ingress.value.port
+      protocol    = ingress.value.protocol
+      cidr_blocks = ingress.value.cidr_blocks
+    }
+  }
+
+  # Standard egress rule (allow all outbound traffic)
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+```
+
+#### The Optional `iterator` Argument
+
+By default, inside the `content` block, you use the name of the dynamic block to access the current value (e.g., `ingress.value`). If you are nesting dynamic blocks inside other dynamic blocks (which gets complex quickly), or if you just want a more readable variable name, you can override this default using the `iterator` argument.
+
+```bash
+dynamic "ingress" {
+  for_each = var.web_ingress_rules
+  iterator = rule # Renaming the iterator
+
+  content {
+    from_port   = rule.value.port # Now we use 'rule' instead of 'ingress'
+    to_port     = rule.value.port
+    protocol    = rule.value.protocol
+    cidr_blocks = rule.value.cidr_blocks
+  }
+}
+```
+
+#### Architect's Warning: Over-engineering
+
+While dynamic blocks are incredibly useful, they can make Terraform configurations harder to read and debug if overused.
+
+**Best Practice:** Only use dynamic blocks when the nested blocks are truly dynamic (e.g., driven by variables). If a security group always has exactly the same three static ports that never change across environments, it is often better to just write the three static `ingress` blocks for the sake of explicit readability.
