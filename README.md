@@ -1164,3 +1164,111 @@ locals {
 
 > [!WARNING]
 > While conditional expressions are powerful, deeply nested ternary operators (e.g., `condition1 ? value1 : (condition2 ? value2 : value3)`) quickly become unreadable. If you find yourself writing complex nested logic, it is usually a sign that you should use Terraform's `lookup()` function with a Map variable instead.
+
+### 4. Built-in Functions: Transforming Data
+
+Terraform does not support user-defined functions. However, it ships with a robust set of built-in functions to transform and combine values within expressions. The general syntax for calling a function is `function_name(arg1, arg2, ...)`.
+
+You can test any function safely without writing resources by using the `terraform console` command.
+
+#### Collection Function: `merge`
+
+The `merge` function takes one or more Maps (or Objects) and combines them into a single Map. If multiple maps have the same key, the value from the map provided last in the arguments will overwrite the others.
+
+**Primary Use Case:** Combining mandatory corporate tags (Default Tags) with resource-specific tags.
+
+```bash
+locals {
+  # These tags must be on every resource according to company policy
+  mandatory_tags = {
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+    CostCenter  = "Engineering"
+  }
+}
+
+resource "aws_instance" "web" {
+  ami           = "ami-123456"
+  instance_type = "t3.micro"
+
+  # We merge the mandatory tags with the specific tags for this server
+  tags = merge(
+    local.mandatory_tags,
+    {
+      Name = "WebServer"
+      Role = "Frontend"
+      # If we added 'CostCenter = "Marketing"' here, it would overwrite the one in mandatory_tags
+    }
+  )
+}
+```
+
+#### Collection Function: `lookup`
+
+The `lookup` function retrieves the value of a single element from a map, given its key. Crucially, it allows you to provide a **default value** if the key does not exist. This prevents your Terraform execution from crashing due to a missing key.
+
+**Primary Use Case:** Selecting environment-specific configurations dynamically.
+
+```bash
+variable "instance_sizes" {
+  type = map(string)
+  default = {
+    "dev"     = "t3.micro"
+    "staging" = "t3.small"
+    "prod"    = "m5.large"
+  }
+}
+
+variable "environment" {
+  type    = string
+  default = "qa" # Notice "qa" is not in our map above
+}
+
+resource "aws_instance" "app" {
+  ami = "ami-123456"
+
+  # Terraform looks for the key "qa" in the map.
+  # Since it doesn't exist, it safely falls back to "t3.micro".
+  instance_type = lookup(var.instance_sizes, var.environment, "t3.micro")
+}
+```
+
+#### File & String Function: `templatefile`
+
+The `templatefile` function reads a file from disk and renders its content as a template using a provided set of variables. This is significantly cleaner than writing massive multi-line strings directly inside your `main.tf`.
+
+**Primary Use Case:** Injecting Terraform variables into an EC2 `user_data` script (a bash script that runs automatically when an AWS server boots for the first time).
+
+1. **Create the template file (`setup.tftpl`):** We use the `.tftpl` extension by convention. Inside, we use the `${...}` syntax to define variables that Terraform will inject.
+
+```bash
+#!/bin/bash
+echo "Starting initialization script..."
+echo "Welcome to the ${environment} environment."
+echo "Setting application port to ${app_port}."
+
+# Start a simple web server
+echo "Hello from ${environment}" > index.html
+python3 -m http.server ${app_port} &
+```
+
+2. **Render it in your resource (`main.tf`):** We use `templatefile(path, vars)` where `vars` is a map of the variables we want to inject.
+
+```bash
+resource "aws_instance" "web" {
+  ami           = "ami-0c7217cdde317cfec"
+  instance_type = "t3.micro"
+
+  # Inject variables into the bash script during provisioning
+  user_data = templatefile("${path.module}/setup.tftpl", {
+    environment = var.environment
+    app_port    = 8080
+  })
+}
+```
+
+#### Other Notable Functions to Explore
+
+- **String Manipulation:** `join()`, `split()`, `replace()`, `lower()`, `upper()`.
+- **Collections:** `length()` (find the size of a list), `keys()` (extract all keys from a map), `values()`.
+- **Encoding:** `base64encode()`, `jsonencode()` (crucial for passing JSON policies to AWS IAM resources).
