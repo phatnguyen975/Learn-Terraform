@@ -48,7 +48,8 @@ sudo apt update && sudo apt install terraform
 terraform -v
 ```
 
-> **Note on OpenTofu:** In recent years, due to HashiCorp's licensing changes, the Linux Foundation launched OpenTofu as an open-source, drop-in replacement for Terraform. The core concepts, HCL syntax, and commands in this tutorial are 100% compatible with OpenTofu. If your organization mandates fully open-source tooling, you can install OpenTofu instead using their official instructions.
+> [!NOTE]
+> In recent years, due to HashiCorp's licensing changes, the Linux Foundation launched [OpenTofu](https://opentofu.org/) as an open-source, drop-in replacement for Terraform. The core concepts, HCL syntax, and commands in this tutorial are 100% compatible with OpenTofu. If your organization mandates fully open-source tooling, you can install OpenTofu instead using their official instructions.
 
 ### 2. Configuring the Cloud Provider CLI (AWS)
 
@@ -79,7 +80,8 @@ aws configure
 aws sts get-caller-identity
 ```
 
-> **Security Best Practice:** Never hardcode your AWS credentials directly inside your Terraform code (`.tf` files). Terraform will automatically detect and utilize the credentials configured by the `aws configure` command (stored in `~/.aws/credentials`).
+> [!TIP]
+> Never hardcode your AWS credentials directly inside your Terraform code (`.tf` files). Terraform will automatically detect and utilize the credentials configured by the `aws configure` command (stored in `~/.aws/credentials`).
 
 ### 3. IDE Optimization for HCL
 
@@ -605,7 +607,8 @@ resource "aws_instance" "app" {
 }
 ```
 
-> **Architect's Tip:** Use Input Variables for values that change per environment (like `region` or `instance_type`). Use Locals for values that are derived or internal to the module's logic.
+> [!TIP]
+> Use Input Variables for values that change per environment (like `region` or `instance_type`). Use Locals for values that are derived or internal to the module's logic.
 
 ### 4. Data Sources (`data`)
 
@@ -773,7 +776,8 @@ As a general rule, Terraform state should be treated as an immutable output of t
 
 Terraform provides the `terraform state` CLI utility for these exact scenarios.
 
-> **Warning:** Operations using `terraform state` strictly modify the state file itself; they **do not** reach out to the Cloud Provider to create, update, or destroy actual resources. Always ensure you have state backups (or S3 Object Versioning enabled) before manipulating the state.
+> [!WARNING]
+> Operations using `terraform state` strictly modify the state file itself; they **do not** reach out to the Cloud Provider to create, update, or destroy actual resources. Always ensure you have state backups (or S3 Object Versioning enabled) before manipulating the state.
 
 #### Inspecting the State: `list` and `show`
 
@@ -1074,3 +1078,89 @@ dynamic "ingress" {
 While dynamic blocks are incredibly useful, they can make Terraform configurations harder to read and debug if overused.
 
 **Best Practice:** Only use dynamic blocks when the nested blocks are truly dynamic (e.g., driven by variables). If a security group always has exactly the same three static ports that never change across environments, it is often better to just write the three static `ingress` blocks for the sake of explicit readability.
+
+### 3. Conditional Expressions
+
+In Terraform, you cannot use traditional `if` / `else` statement blocks like you would in Python or Java. Instead, HCL relies on Conditional Expressions (often called the ternary operator) to assign values dynamically based on a logical evaluation.
+
+#### The Syntax
+
+The syntax follows this exact structure:
+
+```bash
+condition ? true_val : false_val
+```
+
+- `condition`: A boolean expression that evaluates to either `true` or `false` (e.g., `var.environment == "prod"`).
+- `?` **(Then):** If the condition is true, Terraform returns the `true_val`.
+- `:` **(Else):** If the condition is false, Terraform returns the `false_val`.
+
+> [!NOTE]
+> Both `true_val` and `false_val` must be of the same type (e.g., both must be strings, or both must be numbers) so Terraform can predictably determine the final data type.
+
+#### Use Case 1: Dynamic Attribute Assignment
+
+The most common use case is altering a resource's configuration based on the environment. For example, you want a powerful (and expensive) server in Production, but a cheap, small server in Development.
+
+```bash
+variable "environment" {
+  type        = string
+  description = "The current environment (dev or prod)"
+}
+
+resource "aws_instance" "app_server" {
+  ami = "ami-0c7217cdde317cfec"
+
+  # If environment is 'prod', use t3.large. Otherwise, use t3.micro.
+  instance_type = var.environment == "prod" ? "t3.large" : "t3.micro"
+
+  tags = {
+    Name = "AppServer-${var.environment}"
+  }
+}
+```
+
+#### Use Case 2: Conditional Resource Creation (The `count` Trick)
+
+This is a classic Enterprise DevOps pattern. Sometimes you want an entire resource to exist in one environment but not in another (e.g., creating a High-Availability Load Balancer in Prod, but bypassing it in Dev to save money).
+
+Because Terraform lacks an `if` block for resources, we combine Conditional Expressions with the `count` meta-argument.
+
+Remember that `count = 0` tells Terraform to create zero instances of a resource (effectively ignoring it).
+
+```bash
+variable "create_high_availability" {
+  type        = bool
+  description = "Set to true to provision a secondary database instance for HA."
+  default     = false
+}
+
+# This resource will ONLY be created if var.create_high_availability is true
+resource "aws_db_instance" "replica" {
+  # The Trick: If true -> count = 1. If false -> count = 0.
+  count = var.create_high_availability ? 1 : 0
+
+  identifier          = "production-db-replica"
+  instance_class      = "db.t3.medium"
+  engine              = "postgres"
+  # ... other database configurations
+}
+```
+
+#### Advanced Conditionals with Logical Operators
+
+You can chain multiple conditions using logical operators:
+
+- `&&` **(AND):** True only if both sides are true.
+- `||` **(OR):** True if at least one side is true.
+- `!` **(NOT):** Reverses the boolean value.
+
+```bash
+locals {
+  # Enable advanced monitoring only if in prod AND the feature flag is turned on
+  enable_monitoring = (var.environment == "prod" && var.feature_monitoring == true) ? true : false
+}
+```
+
+> [!WARNING]
+> While conditional expressions are powerful, deeply nested ternary operators (e.g., `condition1 ? value1 : (condition2 ? value2 : value3)`) quickly become unreadable. If you find yourself writing complex nested logic, it is usually a sign that you should use Terraform's `lookup()` function with a Map variable instead.
