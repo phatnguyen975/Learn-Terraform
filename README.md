@@ -448,7 +448,7 @@ Once you see **"Destroy complete!"**, your AWS environment is clean again. You h
 
 ---
 
-[< Previous](#terraform-fundamentals) | [Next >](#configuration-management-variables--outputs)
+[< Previous](#environment-setup--installation) | [Next >](#configuration-management-variables--outputs)
 
 ## Configuration Management (Variables & Outputs)
 
@@ -660,7 +660,7 @@ resource "aws_instance" "web" {
 
 ---
 
-[< Previous](#configuration-management-variables--outputs) | [Next >](#state-management-the-brain-of-terraform)
+[< Previous](#terraform-fundamentals) | [Next >](#state-management-the-brain-of-terraform)
 
 ## State Management (The Brain of Terraform)
 
@@ -880,7 +880,7 @@ The `rm` command simply makes Terraform "forget" the resource exists. The databa
 
 ---
 
-[< Previous](#state-management-the-brain-of-terraform) | [Next >](#advanced-control-structures)
+[< Previous](#configuration-management-variables--outputs) | [Next >](#advanced-control-structures)
 
 ## Advanced Control Structures
 
@@ -1293,7 +1293,7 @@ resource "aws_instance" "web" {
 
 ---
 
-[< Previous](#advanced-control-structures) | [Next >](#modules---reusability-and-scaling)
+[< Previous](#state-management-the-brain-of-terraform) | [Next >](#modules---reusability-and-scaling)
 
 ## Modules - Reusability and Scaling
 
@@ -1491,7 +1491,7 @@ If the module maintainers release version 5.0 with "breaking changes" (meaning t
 
 ---
 
-[< Previous](#modules---reusability-and-scaling) | [Next >](#enterprise-best-practices--cicd)
+[< Previous](#advanced-control-structures) | [Next >](#enterprise-best-practices--cicd)
 
 ## Enterprise Best Practices & CI/CD
 
@@ -1748,4 +1748,6 @@ Never hardcode cloud provider credentials (like AWS Access Keys) or database pas
 - Always use your CI/CD platform's native secret management system (e.g., Jenkins Credentials, GitHub Secrets).
 - For advanced enterprise setups, integrate Terraform with a dedicated secrets manager like **HashiCorp Vault** or **AWS Secrets Manager** to inject credentials dynamically at runtime.
 
-[< Previous](#enterprise-best-practices--cicd)
+---
+
+[< Previous](#modules---reusability-and-scaling)
